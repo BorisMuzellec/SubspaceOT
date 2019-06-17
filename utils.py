@@ -60,15 +60,17 @@ def MK(A, B, k=2):
     schurB = Bet - Beet.T.dot(np.linalg.inv(Be)).dot(Beet)
   
     Tee = monge(Ae, Be)
-  
     Tschur = monge(schurA, schurB)
  
-  
     return (np.hstack([np.vstack([Tee, (Beet.T.dot(np.linalg.inv(Tee)) - Tschur.dot(Aeet.T)).dot(np.linalg.inv(Ae))]), np.vstack([np.zeros((k, d-k)), Tschur])]))
 
 def MK_dist(A, B, k = 2):
     T = MK(A, B, k)
     return np.trace(A + B - (T.dot(A) + A.dot(T.T)))
+
+def MK_fidelity(A, B, k = 2):
+    T = MK(A, B, k)
+    return np.trace(T.dot(A) + A.dot(T.T)) / 2.
 
 
 
@@ -100,6 +102,10 @@ def Vpi_MI(A, B, k = 2):
 
 def MI_dist(A, B, k = 2):
     return np.trace(Vpi_MI(A, B, k))
+
+def MI_fidelity(A, B, k = 2):
+    return np.trace((A + B) - Vpi_MI(A, B, k)) / 2.
+
 
 
 ### Knothe-Rosenblatt ###
