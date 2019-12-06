@@ -7,6 +7,7 @@ Created on Sat Jun 15 13:33:51 2019
 """
 
 import numpy as np
+import torch
 
 def sqrtm(A):
     vecs, vals, _ = np.linalg.svd(A)
@@ -116,3 +117,147 @@ def KR_dist(A, B):
     Lb = np.linalg.cholesky(B)
   
     return ((La - Lb)**2).sum()
+
+
+
+# ============== Pytorch Versions ================ #
+
+
+def Sqrtm(A):
+    vals, vecs = torch.symeig(A, True)
+    return (vecs * torch.sqrt(vals)).mm(vecs.t())
+
+def Bures(A,B):
+    sA = Sqrtm(A)
+    return torch.trace(A + B - 2 * Sqrtm(sA.mm(B).mm(sA)))
+
+
+def Monge(A, B):
+  
+    sA = Sqrtm(A)
+    sA_inv = torch.inverse(sA)
+
+    return sA_inv.mm(Sqrtm(sA.mm(B).mm(sA))).mm(sA_inv)
+
+
+def MK_torch(A, B, k=2):
+    d = A.shape[0]
+  
+    Ae = A[:k, :k]
+    Aeet = A[:k, k:]
+    Aet = A[k:, k:]
+  
+    schurA = Aet - Aeet.t().mm(torch.inverse(Ae)).mm(Aeet)
+  
+    Be = B[:k, :k]
+    Beet = B[:k, k:]
+    Bet = B[k:, k:]
+  
+    schurB = Bet - Beet.t().mm(torch.inverse(Be)).mm(Beet)
+  
+    Tee = Monge(Ae, Be)
+    Tschur = Monge(schurA, schurB)
+ 
+    return torch.cat((torch.cat((Tee, Beet.t().mm(torch.inverse(Be)).mm(Tee) - Tschur.mm(Aeet.t()).mm(torch.inverse(Ae))), 0), 
+                      torch.cat((torch.zeros((k, d-k)), Tschur), 0)), 1)
+
+def MK_dist_torch(A, B, k = 2):
+    T = MK_torch(A, B, k)
+    return torch.trace(A + B - (T.mm(A) + A.mm(T.t())))
+
+
+
+#### Monge-Independent ####
+
+def Vpi_MI_torch(A, B, k = 2):
+    d = A.shape[0]
+  
+    Ae = A[:k, :k]
+    Aeet = A[:k, k:]
+  
+    Be = B[:k, :k]
+    Beet = B[:k, k:]
+  
+    I = torch.eye(d)
+    Ve = I[:, :k]
+    Vet = I[:, k:]
+  
+    sAe = Sqrtm(Ae)
+    sAe_inv = torch.inverse(sAe)
+    Te = sAe_inv.mm(Sqrtm(sAe.mm(Be).mm(sAe))).mm(sAe_inv)
+  
+    C1 = Ve.mm(Ae).mm(Te).mm(Ve.t() + (torch.inverse(Be)).mm(Beet).mm(Vet.t()))
+    C2 = Vet.mm(Aeet.t()).mm(Te).mm(Ve.t() + (torch.inverse(Be)).mm(Beet).mm(Vet.t()))
+  
+    C = C1 + C2
+  
+    return A + B - (C + C.t()) 
+
+def MI_dist_torch(A, B, k = 2):
+    return torch.trace(Vpi_MI_torch(A, B, k))
+
+
+
+#### MK Subspace Selection Algorithm ####
+
+
+def polar(A):
+    ### The polar factor of a matrix is its projection on the set of unitary matrices
+    V, _, W = np.linalg.svd(A)
+    return V.dot(W.T)
+
+def subspace_gd(A, B, k, lr = 5e-5, niter = 401, minimize=True, verbose=False):
+
+    d = A.shape[0]
+
+    losses = []
+    Ps = []
+
+#    L = torch.randn((d, d))
+#    S = L.mm(L.t()) / d
+
+    S = A.mm(B)
+
+    with torch.no_grad():
+        S.data = torch.from_numpy(polar(S.data))
+
+#    S = torch.eye(d)
+    S.requires_grad = True
+
+    optimizer = torch.optim.SGD([S], lr = lr)
+
+    scheduler = torch.optim.lr_scheduler.StepLR(optimizer, 1, gamma=0.98, last_epoch=-1)
+
+
+    for i in range(niter):
+
+        SAS = S.t().mm(A).mm(S)
+        SBS = S.t().mm(B).mm(S)
+
+        loss = (2 * minimize - 1) * MK_dist_torch(SAS, SBS, k)
+
+        if loss.item() != loss.item():
+            print('Nan loss')
+            break
+
+        losses.append(loss.item())
+        Ps.append(S.detach())
+
+        if i % 50 == 0 and verbose:
+            print(('iteration {} : loss {}').format(i, torch.abs(loss)))
+
+
+        optimizer.zero_grad()
+        loss.backward()
+        optimizer.step()
+        scheduler.step()
+
+        with torch.no_grad():
+            S.data = torch.from_numpy(polar(S.data))
+
+
+    P_opt = Ps[np.argmin(losses)]
+    
+    return P_opt, losses
+
+
